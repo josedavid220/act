@@ -4,7 +4,7 @@ from os import path as osp
 
 import torch
 
-from .act_net import ACT
+from .act_net import ActTime
 from .act_module import ACTLitModule
 
 

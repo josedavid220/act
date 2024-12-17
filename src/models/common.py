@@ -1,93 +1,117 @@
 import math
 
-import torch
 import torch.nn as nn
 from torch import einsum
 from einops import rearrange
 
 
 def default_conv(in_channels, out_channels, kernel_size, bias=True):
-    return nn.Conv2d(
-        in_channels, out_channels, kernel_size, padding=(kernel_size // 2), bias=bias
+    return nn.Conv1d(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        kernel_size=kernel_size,
+        padding=(kernel_size // 2),
+        bias=bias,
     )
 
 
-class MeanShift(nn.Conv2d):
-    def __init__(self,
-                 rgb_range,
-                 rgb_mean=(0.4488, 0.4371, 0.4040),
-                 rgb_std=(1.0, 1.0, 1.0),
-                 sign=-1):
-
-        super(MeanShift, self).__init__(3, 3, kernel_size=1)
-        std = torch.Tensor(rgb_std)
-        self.weight.data = torch.eye(3).view(3, 3, 1, 1) / std.view(3, 1, 1, 1)
-        self.bias.data = sign * rgb_range * torch.Tensor(rgb_mean) / std
-        for p in self.parameters():
-            p.requires_grad = False
-
-
 class ResBlock(nn.Module):
-    def __init__(self,
-                 conv,
-                 n_feats,
-                 kernel_size,
-                 bias=True,
-                 bn=False,
-                 act=nn.ReLU(True),
-                 res_scale=1):
-
+    def __init__(
+        self,
+        conv,
+        n_feats,
+        kernel_size,
+        bias=True,
+        batch_norm=False,
+        act=nn.ReLU(True),
+        res_scale=1,
+    ):
         super(ResBlock, self).__init__()
-        m = []
-        for i in range(2):
-            m.append(conv(n_feats, n_feats, kernel_size, bias=bias))
-            if bn:
-                m.append(nn.BatchNorm2d(n_feats))
-            if i == 0:
-                m.append(act)
-
-        self.body = nn.Sequential(*m)
         self.res_scale = res_scale
+
+        modules = []
+        for i in range(2):
+            modules.append(
+                conv(
+                    in_channels=n_feats,
+                    out_channels=n_feats,
+                    kernel_size=kernel_size,
+                    bias=bias,
+                )
+            )
+            if i == 0:  # Add an activation function after the first convolution
+                modules.append(act)
+            if batch_norm:
+                modules.append(nn.BatchNorm1d(n_feats))
+
+        self.body = nn.Sequential(*modules)
 
     def forward(self, x):
         res = self.body(x).mul(self.res_scale)
         res += x
-
         return res
 
 
+# Taken from: https://github.com/serkansulun/pytorch-pixelshuffle1d/blob/master/pixelshuffle1d.py
+class PixelShuffle1D(nn.Module):
+    """
+    1D pixel shuffler. https://arxiv.org/pdf/1609.05158.pdf
+    Upscales sample length, downscales channel length
+    "short" is input, "long" is output
+    """
+
+    def __init__(self, upscale_factor):
+        super(PixelShuffle1D, self).__init__()
+        self.upscale_factor = upscale_factor
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+        short_channel_len = x.shape[1]
+        short_width = x.shape[2]
+
+        long_channel_len = short_channel_len // self.upscale_factor
+        long_width = self.upscale_factor * short_width
+
+        x = x.contiguous().view(
+            [batch_size, self.upscale_factor, long_channel_len, short_width]
+        )
+        x = x.permute(0, 2, 3, 1).contiguous()
+        x = x.view(batch_size, long_channel_len, long_width)
+
+        return x
+
+
 class Upsampler(nn.Sequential):
-    def __init__(self, 
-                 conv, 
-                 scale, 
-                 n_feats, 
-                 bn=False, 
-                 act=False, 
-                 bias=True):
+    def __init__(self, conv, scale, n_feats, bn=False, act=False, bias=True):
 
         m = []
         if (scale & (scale - 1)) == 0:  # Is scale = 2^n?
             for _ in range(int(math.log(scale, 2))):
-                m.append(conv(n_feats, 4 * n_feats, 3, bias))
-                m.append(nn.PixelShuffle(2))
+                m.append(conv(n_feats, 2 * n_feats, 3, bias))
+                m.append(PixelShuffle1D(2))
                 if bn:
-                    m.append(nn.BatchNorm2d(n_feats))
-                if act == 'relu':
+                    m.append(nn.BatchNorm1d(n_feats))
+                if act == "relu":
                     m.append(nn.ReLU(True))
-                elif act == 'prelu':
+                elif act == "prelu":
                     m.append(nn.PReLU(n_feats))
 
-        elif scale == 3:
-            m.append(conv(n_feats, 9 * n_feats, 3, bias))
-            m.append(nn.PixelShuffle(3))
-            if bn:
-                m.append(nn.BatchNorm2d(n_feats))
-            if act == 'relu':
-                m.append(nn.ReLU(True))
-            elif act == 'prelu':
-                m.append(nn.PReLU(n_feats))
         else:
-            raise NotImplementedError
+            m.append(
+                conv(
+                    in_channels=n_feats,
+                    out_channels=scale * n_feats,
+                    kernel_size=scale,
+                    bias=bias,
+                )
+            )
+            m.append(PixelShuffle1D(scale))
+            if bn:
+                m.append(nn.BatchNorm1d(n_feats))
+            if act == "relu":
+                m.append(nn.ReLU(True))
+            elif act == "prelu":
+                m.append(nn.PReLU(n_feats))
 
         super(Upsampler, self).__init__(*m)
 
@@ -149,15 +173,15 @@ class SelfAttention(nn.Module):
     def forward(self, x):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
 
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
+        q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), qkv)
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        dots = einsum("b h i d, b h j d -> b h i j", q, k) * self.scale
 
         attn = self.attend(dots)
 
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = einsum("b h i j, b h j d -> b h i d", attn, v)
 
-        out = rearrange(out, 'b h n d -> b n (h d)')
+        out = rearrange(out, "b h n d -> b n (h d)")
 
         return self.to_out(out)
 
@@ -183,24 +207,24 @@ class CrossAttention(nn.Module):
 
     def forward(self, x_q, x_kv):
         _, _, dim, heads = *x_q.shape, self.heads
-        _, _, dim_large = x_kv.shape 
+        _, _, dim_large = x_kv.shape
 
         assert dim == dim_large
 
         q = self.to_q(x_q)
 
-        q = rearrange(q, 'b n (h d) -> b h n d', h=heads)
+        q = rearrange(q, "b n (h d) -> b h n d", h=heads)
 
         kv = self.to_kv(x_kv).chunk(2, dim=-1)
-        
-        k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=heads), kv)
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=heads), kv)
+
+        dots = einsum("b h i d, b h j d -> b h i j", q, k) * self.scale
 
         attn = self.attend(dots)
 
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = einsum("b h i j, b h j d -> b h i d", attn, v)
 
-        out = rearrange(out, 'b h n d -> b n (h d)')
+        out = rearrange(out, "b h n d -> b n (h d)")
 
         return self.to_out(out)

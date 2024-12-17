@@ -5,6 +5,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Rich CNN-Transformer Feature Aggregation Networks for SR')
 
+    parser.add_argument('--model_name', type=str, default="1000_5000", help='set the model name')
+    
     parser.add_argument('--release', action='store_true', 
                         help='store true for inference using pretrained weights')
 
@@ -100,7 +102,7 @@ def parse_args():
                         help='test dataset name')
     parser.add_argument('--ext', type=str, default='img', 
                         help='dataset file extension')
-    parser.add_argument('--scale', type=int, default=1, 
+    parser.add_argument('--scale', type=int, default=5, 
                         help='super resolution scale')
     parser.add_argument('--quality_factor', type=int, default=40,
                         help='quality factor for image compression')
@@ -108,7 +110,7 @@ def parse_args():
                         help='input patch size')
     parser.add_argument('--rgb_range', type=int, default=255, 
                         help='maximum value of RGB')
-    parser.add_argument('--n_colors', type=int, default=3, 
+    parser.add_argument('--n_channels', type=int, default=1, 
                         help='number of color channels')
     parser.add_argument('--no_augment', action='store_true', 
                         help='whether to use data augmentation')
