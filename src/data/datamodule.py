@@ -1,15 +1,14 @@
-from importlib import import_module
-
 from pytorch_lightning import LightningDataModule
-
-from torch.utils.data import DataLoader
-
+from torch.utils.data import DataLoader, random_split
+from .srdata import SignalDataset
+import torch
 
 class SRDataModule(LightningDataModule):
     def __init__(self, args):
         super().__init__()
         self.args = args
 
+        self.dir_data = args.dir_data
         self.data_train = args.data_train
         self.data_test = args.data_test
 
@@ -18,14 +17,16 @@ class SRDataModule(LightningDataModule):
         self.num_workers = args.num_workers
 
     def setup(self, stage=None):
-        pass
+        
+        self.signal_dataset_test = SignalDataset(self.dir_data, train=False)
+        signal_dataset_full = SignalDataset(self.dir_data, train=True)
+        self.signal_dataset_train, self.signal_dataset_val = random_split(
+            signal_dataset_full, [0.9, 0.1], generator=torch.Generator().manual_seed(42)
+        )
 
     def train_dataloader(self):
-        m = import_module('src.data.' + self.data_train.lower())
-        dataset = getattr(m, self.data_train)(self.args, name=self.data_train)
-
         return DataLoader(
-            dataset,
+            self.signal_dataset_train,
             batch_size=self.batch_size,
             shuffle=True,
             pin_memory=not self.cpu,
@@ -33,19 +34,8 @@ class SRDataModule(LightningDataModule):
         )
 
     def val_dataloader(self):
-        if self.data_test in ['Set5', 'Set14', 'B100', 'Urban100', 'Manga109']:
-            val_dataset = import_module('src.data.benchmark')
-            val_dataset = getattr(val_dataset, 'Benchmark')(
-                self.args, train=False, name=self.data_test
-            )
-
-        else:
-            raise NotImplementedError(
-                f'Incorrect test dataset [{self.data_test}] is given'
-            )
-
         return DataLoader(
-            val_dataset,
+            self.signal_dataset_val,
             batch_size=1,
             shuffle=False,
             pin_memory=not self.cpu,
@@ -54,19 +44,8 @@ class SRDataModule(LightningDataModule):
 
 
     def test_dataloader(self):
-        if self.data_test in ['Set5', 'Set14', 'B100', 'Urban100', 'Manga109']:
-            test_dataset = import_module('src.data.benchmark')
-            test_dataset = getattr(test_dataset, 'Benchmark')(
-                self.args, train=False, name=self.data_test
-            )
-
-        else:
-            raise NotImplementedError(
-                f'Incorrect test dataset [{self.data_test}] is given'
-            )
-
         return DataLoader(
-            test_dataset,
+            self.signal_dataset_test,
             batch_size=1,
             shuffle=False,
             pin_memory=not self.cpu,

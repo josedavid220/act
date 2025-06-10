@@ -29,4 +29,4 @@ def unembedding(x, token_size, seq_len):
         kernel_size=(1, token_size),
         stride=token_size,
     )
-    return x.squeeze()
+    return x.squeeze(2)

@@ -11,54 +11,42 @@ from .convolution import ResidualGroup, FB
 class ActTime(torch.nn.Module):
     def __init__(
         self,
-        n_channels,
-        n_feats,
-        token_size,
-        n_heads,
-        n_layers,
-        scale,
-        reduction,
-        n_resblocks,
-        n_resgroups,
-        n_fusionblocks,
-        expansion_ratio,
-        **kwargs
+        args
     ):
         super(ActTime, self).__init__()
 
         conv = default_conv
 
-        self.n_channels = n_channels
-        self.n_feats = n_feats
-        self.token_size = token_size
-        self.n_heads = n_heads
-        self.n_layers = n_layers
-        self.scale = scale
-        self.reduction = reduction
-        self.n_resblocks = n_resblocks
-        self.n_resgroups = n_resgroups
-        self.n_fusionblocks = n_fusionblocks
-        self.expansion_ratio = expansion_ratio
-        # self.n_channels = args.n_channels
-        # self.n_feats = args.n_feats
-        # self.token_size = args.token_size
-        # self.n_heads = args.n_heads
-        # self.n_layers = args.n_layers
-        # self.scale = args.scale
-        # self.reduction = args.reduction
-        # self.n_resblocks = args.n_resblocks
-        # self.n_resgroups = args.n_resgroups
-        # self.n_fusionblocks = args.n_fusionblocks
-        # self.expansion_ratio = args.expansion_ratio
+        self.n_channels = args.n_channels
+        self.n_feats = args.n_feats
+        self.token_size = args.token_size
+        self.n_heads = args.n_heads
+        self.n_layers = args.n_layers
+        self.scale = args.scale
+        self.reduction = args.reduction
+        self.n_resblocks = args.n_resblocks
+        self.n_resgroups = args.n_resgroups
+        self.n_fusionblocks = args.n_fusionblocks
+        self.expansion_ratio = args.expansion_ratio
 
         embedding_dim = self.n_feats * self.token_size
         hidden_dim = embedding_dim * self.expansion_ratio
+        
+        match args.act:
+            case 'relu':
+                act = nn.ReLU(True)
+            case 'elu':
+                act = nn.ELU(True)
+            case 'gelu':
+                act = nn.GELU(True)
+            case _:
+                act = nn.ReLU(True)                
 
         # Head definition
         self.head = nn.Sequential(
             default_conv(self.n_channels, self.n_feats, 3),
-            ResBlock(conv=conv, n_feats=self.n_feats, kernel_size=5, act=nn.ReLU(True)),
-            ResBlock(conv=conv, n_feats=self.n_feats, kernel_size=5, act=nn.ReLU(True)),
+            ResBlock(conv=conv, n_feats=self.n_feats, kernel_size=5, act=act),
+            ResBlock(conv=conv, n_feats=self.n_feats, kernel_size=5, act=act),
         )
 
         # Body definition
@@ -92,10 +80,10 @@ class ActTime(torch.nn.Module):
         self.fusion_block = nn.ModuleList(
             [
                 nn.Sequential(
-                    FB(conv, self.n_feats * 2, kernel_size=1, act=nn.ReLU(True)),
-                    FB(conv, self.n_feats * 2, kernel_size=1, act=nn.ReLU(True)),
-                    FB(conv, self.n_feats * 2, kernel_size=1, act=nn.ReLU(True)),
-                    FB(conv, self.n_feats * 2, kernel_size=1, act=nn.ReLU(True)),
+                    FB(conv, self.n_feats * 2, kernel_size=1, act=act),
+                    FB(conv, self.n_feats * 2, kernel_size=1, act=act),
+                    FB(conv, self.n_feats * 2, kernel_size=1, act=act),
+                    FB(conv, self.n_feats * 2, kernel_size=1, act=act),
                 )
                 for _ in range(self.n_fusionblocks)
             ]
@@ -122,7 +110,7 @@ class ActTime(torch.nn.Module):
                         out_channels=self.n_feats,
                         kernel_size=3,
                     ),
-                    nn.ReLU(True),
+                    act,
                     conv(
                         in_channels=self.n_feats,
                         out_channels=self.n_feats,
@@ -147,7 +135,7 @@ class ActTime(torch.nn.Module):
     def forward(self, x):
         seq_len = x.size(-1)  # Save sequence length for later steps
 
-        # x = F.layer_norm(x, normalized_shape=(seq_len))
+        # x = F.layer_norm(x, normalized_shape=(seq_len,))
         x = x.unsqueeze(1)  # Add channel dimmension of 1
         x = self.head(x)
         identitiy = x  # Save head result for residual connection before tail
@@ -180,6 +168,6 @@ class ActTime(torch.nn.Module):
 
         x = self.conv_last(f)
         x = x + identitiy  # Final residual connection
-        x = self.tail(x).squeeze()  # Remove channel dimension
+        x = self.tail(x).squeeze(1)  # Remove channel dimension
 
         return x

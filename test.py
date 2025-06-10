@@ -38,7 +38,7 @@ def main():
 
     # define trainer
     trainer = Trainer(
-        default_root_dir=args.save_path, gpus=1, enable_progress_bar=False
+        default_root_dir=args.save_path, enable_progress_bar=False
     )
 
     # test model

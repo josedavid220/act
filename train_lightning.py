@@ -2,11 +2,9 @@ import os
 from os import path as osp
 from argparse import Namespace
 
-import numpy as np
 import torch
 import torch.nn as nn
 from pytorch_lightning import LightningModule
-from src.utils import plot_signals
 
 
 class ACTLitModule(LightningModule):
@@ -33,8 +31,7 @@ class ACTLitModule(LightningModule):
 
         self.save_path = args.save_path
 
-        # self.criterion = nn.L1Loss()
-        self.criterion = nn.MSELoss()
+        self.criterion = nn.L1Loss()
 
     def on_load_checkpoint(self, checkpoint):
         state_dict = checkpoint["state_dict"]
@@ -76,18 +73,12 @@ class ACTLitModule(LightningModule):
         return [optimizer], [scheduler]
 
     def training_step(self, train_batch, batch_idx):
-        signal_lq, signal_hq = train_batch
+        signal_lq, signal_hq, _ = train_batch
         output = self(signal_lq)
         loss = self.criterion(output, signal_hq)
 
         self.log(
-            "train/loss",
-            loss,
-            prog_bar=False,
-            logger=True,
-            on_step=True,
-            on_epoch=True,
-            sync_dist=True,
+            "train/loss", loss, prog_bar=False, logger=True, on_step=True, on_epoch=True
         )
 
         return loss
@@ -100,7 +91,7 @@ class ACTLitModule(LightningModule):
         self.log(
             "val/loss",
             loss,
-            prog_bar=True,
+            prog_bar=False,
             logger=True,
             on_step=False,
             on_epoch=True,
@@ -112,45 +103,52 @@ class ACTLitModule(LightningModule):
         # grid = make_grid(output / 255)
         # self.logger.experiment.add_image(val_img_name, grid, self.trainer.current_epoch)
 
-    # def on_test_start(self):
-    #     from src.utils.utils_logger import get_logger
-    #     from src.utils.utils_saver import Saver
+    def on_test_start(self):
+        from src.utils.utils_logger import get_logger
+        from src.utils.utils_saver import Saver
 
-    #     assert self.task in ["sr", "car"]
+        assert self.task in ["sr", "car"]
 
-    #     self.data_test = self.args.data_test
+        self.data_test = self.args.data_test
 
-    #     self.save_dir_images = osp.join(
-    #         self.save_path, "images", "results-{}".format(self.data_test)
-    #     )
-    #     if not osp.exists(self.save_dir_images):
-    #         os.makedirs(self.save_dir_images, exist_ok=True)
-
-    #     self.saver = Saver()
-    #     self.saver.begin_background()
-
-    #     self.text_logger = get_logger(log_path=osp.join(self.save_path, "result.log"))
-
-    #     self.text_logger.info(f"Test dataset: {self.data_test}")
-    #     self.text_logger.info(f"Scale factor: {self.scale}")
-
-    #     self.border = self.scale if self.task == "sr" else 0
-
-    #     self.avg_psnr = []
-
-    def test_step(self, batch, batch_idx):
-        signal_lq, signal_hq = batch
-
-        output = self(signal_lq).squeeze()
-
-        fig = plot_signals(
-            low_res_signals=signal_lq.squeeze(),
-            high_res_signals=signal_hq.squeeze(),
-            model_signals=output,
-            show=False,
-            rows=1
+        self.save_dir_images = osp.join(
+            self.save_path, "images", "results-{}".format(self.data_test)
         )
-        filepath = f"{self.save_path}/{batch_idx}.png"
-        fig.savefig(filepath, format="png")
-        
-        print(f"Saved figure {batch_idx}", end="\r")
+        if not osp.exists(self.save_dir_images):
+            os.makedirs(self.save_dir_images, exist_ok=True)
+
+        self.saver = Saver()
+        self.saver.begin_background()
+
+        self.text_logger = get_logger(log_path=osp.join(self.save_path, "result.log"))
+
+        self.text_logger.info(f"Test dataset: {self.data_test}")
+        self.text_logger.info(f"Scale factor: {self.scale}")
+
+        self.border = self.scale if self.task == "sr" else 0
+
+        self.avg_psnr = []
+
+    # def test_step(self, batch, batch_idx):
+    #     img_lq, img_gt, filename = batch
+
+    #     if self.self_ensemble:
+    #         # x8 self-ensemble
+    #         output = self.forward_x8(img_lq, self.forward_chop)
+    #     else:
+    #         output = self.forward_chop(img_lq)
+
+    #     output = quantize(output, self.rgb_range)
+
+    #     psnr = calc_psnr(output, img_gt, self.scale, self.rgb_range)
+
+    #     self.text_logger.info(f"Filename: {filename[0]} | PSNR: {psnr:.3f}")
+    #     self.avg_psnr.append(psnr)
+
+    #     self.saver.save_results(
+    #         save_dir=self.save_dir_images,
+    #         filename=filename[0],
+    #         save_list=[output, img_lq, img_gt],
+    #         scale=self.scale,
+    #         rgb_range=self.rgb_range,
+    #     )
